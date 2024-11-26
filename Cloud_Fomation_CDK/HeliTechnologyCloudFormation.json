@@ -1,0 +1,11 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  S3HeliTechnologyBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'HeliTechnology'
+      VersioningConfiguration:
+        Status: 'Enabled'
+      Tags:
+        - Key: 'Environment'
+          Value: 'Production'

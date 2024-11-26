@@ -1,0 +1,106 @@
+stages:
+  - setup
+  - build
+  - deploy
+  - test
+
+pipeline_start:
+  stage: setup
+  script:
+    - echo $CI_JOB_STAGE
+  environment:
+    name: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  tags:
+    - local-runner
+  variables:
+    GIT_TAG: "$(git describe --tags)"
+  script:
+    - echo "Triggering start webhook"
+    - |
+      curl -X POST https://webhook.site/2f4eecb6-ed8c-4f13-b0fb-2ac4c661c554 \
+           -H "Content-Type: application/json" \
+           -d '{"message": "Pipeline started for project: $CI_PROJECT_NAME, branch: $CI_COMMIT_BRANCH"}'
+
+build:
+  stage: build
+  script:
+    - echo $CI_JOB_STAGE
+  environment:
+    name: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  tags:
+    - local-runner
+  variables:
+    GIT_TAG: "$(git describe --tags)"
+  before_script:
+    - docker login -u $USER -p $PASSWD $REGISTRY_URL
+    - git tag -d $(git tag -l)
+    - git fetch --tags
+  script:
+    - echo "Docker image is being create"
+    - docker build -t $REGISTRY_URL/$IM_NAME:$(git tag --list | sort -V | tail -n1)$STAGE_IM_NAME_PREFIX .
+    - echo "Docker image was successfully created"
+    - echo "Start pushing image to repository"
+    - VER=$(git tag --list | sort -V | tail -n1)$STAGE_IM_NAME_PREFIX
+    - docker push $REGISTRY_URL/$IM_NAME:${VER}
+    - echo "Image was successfully pushed to repository"
+
+deploy:
+  stage: deploy
+  script:
+    - echo $CI_JOB_STAGE
+  environment:
+    name: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  tags:
+    - local-runner
+  needs: ["build"]
+  variables:
+    GIT_TAG: "$(git describe --tags)"
+  before_script:
+    - docker stack rm $STACK_NAME
+  script:
+    - echo "Start deploy container"
+    - docker run -it -d -p 443:443 -e STATIC_PAGE_TITLE="Inflight Website" inflight-nginx:$[VER]
+    - echo "The container was successfully deployed"
+
+reload:
+  stage: reload
+  script:
+    - echo $CI_JOB_STAGE
+  environment:
+    name: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  tags:
+    - local-runner
+  needs: ["deploy"]
+  variables:
+    GIT_TAG: "$(git describe --tags)"
+  script:
+    - echo "Reloading Haproxy"
+    - export HAPROXY_NAME=$(docker ps -f name=haproxy_staging --quiet) && sleep 20
+    - docker kill -s HUP $HAPROXY_NAME
+    - echo "Haproxy was successfully reloaded"
+
+pipeline_end:
+  stage: test
+  script:
+    - echo $CI_JOB_STAGE
+  environment:
+    name: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"'
+  tags:
+    - local-runner
+  script:
+    - echo "Triggering end webhook..."
+    - |
+      curl -X POST https://webhook.site/2f4eecb6-ed8c-4f13-b0fb-2ac4c661c554 \
+           -H "Content-Type: application/json" \
+           -d '{"message": "Pipeline completed for project: $CI_PROJECT_NAME, branch: $CI_COMMIT_BRANCH, status: $CI_JOB_STATUS"}'
+  when: always
